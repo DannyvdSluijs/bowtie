@@ -255,7 +255,7 @@ class ConnectableImage:
                         ),
                     ) from err
 
-                stack.push_async_callback(container.delete, force=True)  # type: ignore[reportUnknownMemberType]
+                stack.push_async_callback(container.delete, force=True)
                 create = start_container
 
                 try:
@@ -294,13 +294,20 @@ async def start_container_maybe_pull(docker: Docker, image_name: str):
             # This craziness can go wrong in various ways, none of them
             # machine parseable.
 
-            status, data, *_ = err.args
+            data: dict[str, str]
+            if len(err.args) == 1:
+                status, data, message = err.status, {}, err.message
+
+                if "403" in message or ": denied" in message:
+                    raise NoSuchImplementation(image_name) from err
+            else:
+                status, data, *_ = err.args
+                message = data.get("message", "")
+
             if data.get("cause") == "image not known":
                 raise NoSuchImplementation(image_name) from err
 
-            message = ghcr = data.get("message", "")
-
-            if status == 500:  # noqa: PLR2004
+            if status in {404, 500}:
                 try:
                     # GitHub Registry saying an image doesn't exist as
                     # reported within GitHub Actions' version of Podman...
@@ -308,7 +315,7 @@ async def start_container_maybe_pull(docker: Docker, image_name: str):
                     #   Head "https://ghcr.io/v2/bowtie-json-schema/image-name/manifests/latest": denied  # noqa: E501
                     # with seemingly no other indication elsewhere and
                     # obviously no good way to detect this specific case
-                    no_image = message.endswith('/latest": denied')
+                    no_image = ": denied" in message
                 except Exception:  # noqa: BLE001, S110
                     pass
                 else:
@@ -320,7 +327,7 @@ async def start_container_maybe_pull(docker: Docker, image_name: str):
                     # reported locally via podman on macOS...
 
                     # message will be ... a JSON string !?! ...
-                    error = json.loads(ghcr).get("message", "")
+                    error = json.loads(message).get("message", "")
                 except Exception:  # noqa: BLE001, S110
                     pass  # nonJSON / missing key
                 else:

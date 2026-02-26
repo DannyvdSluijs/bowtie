@@ -8,7 +8,9 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.io.UncheckedIOException;
 import java.net.URI;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.jar.Manifest;
 import org.sjf4j.JsonObject;
 import org.sjf4j.Sjf4j;
@@ -24,115 +26,131 @@ public class BowtieSjf4jValidator {
     new BowtieSjf4jValidator(System.out).run(reader);
   }
 
-  private final List<String> dialects =
+  private static final List<String> DIALECTS =
       List.of("https://json-schema.org/draft/2020-12/schema");
 
   private final PrintStream output;
+  private final String startResponseJson;
   private boolean started;
+  private final String dialectOkJson =
+      Sjf4j.toJsonString(new DialectResponse(true));
 
-  public BowtieSjf4jValidator(PrintStream output) { this.output = output; }
-
-  private void run(BufferedReader reader) {
-    reader.lines().forEach(this::handle);
+  public BowtieSjf4jValidator(PrintStream output) {
+    this.output = output;
+    this.startResponseJson = buildStartResponseJson();
   }
 
-  private void handle(String data) {
+  private void run(BufferedReader reader) {
     try {
-      JsonObject jo = JsonObject.fromJson(data);
-      String cmd = jo.getString("cmd");
-      switch (cmd) {
-      case "start" -> start(jo);
-      case "dialect" -> dialect(jo);
-      case "run" -> run(jo);
-      case "stop" -> System.exit(0);
-      default ->
-        throw new IllegalArgumentException("Unknown cmd [%s]".formatted(cmd));
+      String line;
+      while ((line = reader.readLine()) != null) {
+        handle(line);
       }
     } catch (IOException e) {
       throw new UncheckedIOException(e);
     }
   }
 
-  private void start(JsonObject jo) throws IOException {
+  private void handle(String data) {
+    JsonObject jo = JsonObject.fromJson(data);
+    String cmd = jo.getString("cmd");
+    switch (cmd) {
+    case "start" -> start(jo);
+    case "dialect" -> dialect();
+    case "run" -> runCase(jo);
+    case "stop" -> System.exit(0);
+    default ->
+      throw new IllegalArgumentException("Unknown cmd [%s]".formatted(cmd));
+    }
+  }
+
+  private void start(JsonObject jo) {
     started = true;
-    StartRequest startRequest = jo.toNode(StartRequest.class);
-    if (startRequest.version() != 1) {
+    StartRequest req = jo.toNode(StartRequest.class);
+    if (req.version() != 1) {
       throw new IllegalArgumentException(
-          "Unsupported IHOP version [%d]".formatted(startRequest.version()));
+          "Unsupported IHOP version [%d]".formatted(req.version()));
     }
-
-    InputStream is = getClass().getResourceAsStream("META-INF/MANIFEST.MF");
-    var attributes = new Manifest(is).getMainAttributes();
-
-    String fullName =
-        "%s-%s".formatted(attributes.getValue("Implementation-Group"),
-                            attributes.getValue("Implementation-Name"));
-    StartResponse startResponse = new StartResponse(
-        1, new Implementation(
-               "java", fullName, attributes.getValue("Implementation-Version"),
-               dialects, "https://sjf4j.org",
-               "https://github.com/sjf4j-projects/sjf4j",
-               "https://github.com/sjf4j-projects/sjf4j/issues",
-               "https://github.com/sjf4j-projects/sjf4j",
-               System.getProperty("os.name"), System.getProperty("os.version"),
-               Runtime.version().toString(), List.of()));
-    output.println(Sjf4j.toJsonString(startResponse));
+    output.println(startResponseJson);
   }
 
-  private void dialect(JsonObject jo) {
-    if (!started) {
-      throw new IllegalArgumentException("Not started!");
-    }
-
-    DialectRequest dialectRequest = Sjf4j.fromNode(jo, DialectRequest.class);
-    if (dialects.contains(dialectRequest.dialect())) {
-      output.println(Sjf4j.toJsonString(new DialectResponse(true)));
-    } else {
-      output.println(Sjf4j.toJsonString(new DialectResponse(false)));
-    }
+  private void dialect() {
+    ensureStarted();
+    output.println(dialectOkJson);
   }
 
-  private void run(JsonObject jo) {
-    if (!started) {
-      throw new IllegalArgumentException("Not started!");
-    }
-    RunRequest runRequest = Sjf4j.fromNode(jo, RunRequest.class);
+  private void runCase(JsonObject jo) {
+    ensureStarted();
 
     try {
+      JsonObject tcJo = jo.getJsonObject("case");
+
+      Map<String, Object> registry = tcJo.getMap("registry");
       SchemaStore store = new SchemaStore();
-      if (runRequest.testCase().registry() != null) {
-        runRequest.testCase().registry().forEach((k, v) -> {
-          store.register(URI.create(k), JsonSchema.fromNode(v));
-        });
+      if (registry != null) {
+        for (Map.Entry<String, Object> e : registry.entrySet()) {
+          store.register(URI.create(e.getKey()),
+                         JsonSchema.fromNode(e.getValue()));
+        }
       }
 
-      JsonSchema schema = JsonSchema.fromNode(runRequest.testCase().schema());
+      JsonSchema schema = JsonSchema.fromNode(tcJo.getNode("schema"));
       schema.compile(store);
 
-      List<TestResult> results =
-          runRequest.testCase()
-              .tests()
-              .stream()
-              .map(test -> new TestResult(schema.isValid(test.instance())))
-              .toList();
+      List<Object> tests = tcJo.getList("tests");
+      List<TestResult> results = new ArrayList<>(tests.size());
+      for (Object t : tests) {
+        Map<?, ?> tmap = (Map<?, ?>) t;
+        results.add(new TestResult(schema.isValid(tmap.get("instance"))));
+      }
 
       output.println(
-          Sjf4j.toJsonString(new RunResponse(runRequest.seq(), results)));
+          Sjf4j.toJsonString(new RunResponse(jo.getNode("seq"), results)));
     } catch (Exception e) {
-      StringWriter stringWriter = new StringWriter();
-      PrintWriter printWriter = new PrintWriter(stringWriter);
-      e.printStackTrace(printWriter);
-      RunErroredResponse response = new RunErroredResponse(
-          runRequest.seq(), true,
-          new ErrorContext(e.getMessage(), stackTraceToString(e)));
-      output.println(Sjf4j.toJsonString(response));
+      output.println(Sjf4j.toJsonString(new RunErroredResponse(
+          jo.getNode("seq"), true,
+          new ErrorContext(e.getMessage(), stackTraceToString(e)))));
     }
   }
 
-  private String stackTraceToString(Exception e) {
-    StringWriter stringWriter = new StringWriter();
-    e.printStackTrace(new PrintWriter(stringWriter));
-    return stringWriter.toString();
+  private void ensureStarted() {
+    if (!started) {
+      throw new IllegalArgumentException("Not started!");
+    }
+  }
+
+  private String buildStartResponseJson() {
+    try (InputStream is =
+             getClass().getResourceAsStream("/META-INF/MANIFEST.MF")) {
+      if (is == null) {
+        throw new IllegalStateException("Missing MANIFEST.MF");
+      }
+      var attributes = new Manifest(is).getMainAttributes();
+
+      String fullName =
+          "%s-%s".formatted(attributes.getValue("Implementation-Group"),
+                              attributes.getValue("Implementation-Name"));
+
+      StartResponse startResponse = new StartResponse(
+          1,
+          new Implementation(
+              "java", fullName, attributes.getValue("Implementation-Version"),
+              DIALECTS, "https://sjf4j.org",
+              "https://github.com/sjf4j-projects/sjf4j",
+              "https://github.com/sjf4j-projects/sjf4j/issues",
+              "https://github.com/sjf4j-projects/sjf4j",
+              System.getProperty("os.name"), System.getProperty("os.version"),
+              Runtime.version().toString(), List.of()));
+      return Sjf4j.toJsonString(startResponse);
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  private static String stackTraceToString(Throwable t) {
+    StringWriter sw = new StringWriter(512);
+    t.printStackTrace(new PrintWriter(sw));
+    return sw.toString();
   }
 }
 

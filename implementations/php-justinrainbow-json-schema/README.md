@@ -2,11 +2,11 @@
 This folder contains the test harness for the justinrainbow/json-schema implementation.
 
 # Easy to use commands
-You can check composer scripts for easy to use commands. 
+You can check composer scripts for easy to use commands.
 
 Al commands assume you have a local container which can be made available using
 ```bash
-composer build-container 
+composer build-container
 ```
 
 You can run test using the following command:

@@ -224,6 +224,13 @@ updates:
     cooldown:
       default-days: 7
 
+  - package-ecosystem: "gradle"
+    directory: "/implementations/java-json-schema-react"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+
   - package-ecosystem: "mix"
     directory: "/implementations/elixir-jsv"
     schedule:
@@ -466,6 +473,13 @@ updates:
 
   - package-ecosystem: "docker"
     directory: "/implementations/java-sjf4j"
+    schedule:
+      interval: "daily"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "docker"
+    directory: "/implementations/java-json-schema-react"
     schedule:
       interval: "daily"
     cooldown:

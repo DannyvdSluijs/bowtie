@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace JsonRainbow;
 
 use Composer\InstalledVersions;
+use JsonSchema\Constraints\Constraint;
 use JsonSchema\Constraints\Factory;
 use JsonSchema\SchemaStorage;
 use JsonSchema\Validator;
@@ -17,6 +18,8 @@ class TestHarness
     private mixed $in;
     private mixed $out;
     private mixed $debug;
+
+    private ?string $currentDialect = null;
 
     public function __construct($in, $out, $debug)
     {
@@ -34,7 +37,7 @@ class TestHarness
         $this->debug('Test harness is being invoked');
 
         while (true) {
-            $next = fgets($this->in);
+            $next = trim(fgets($this->in));
             if ($next === false || $next === '') {
                 throw new RuntimeException('Unable to read from input');
             }
@@ -43,7 +46,7 @@ class TestHarness
             $response = match ($request->cmd) {
                 'start' => $this->start($request),
                 'stop' => $this->stop(),
-                'dialect' => $this->dialect(),
+                'dialect' => $this->dialect($request),
                 'run' => $this->run($request),
                 default => [
                     'seq' => $request->seq,
@@ -100,19 +103,23 @@ class TestHarness
         exit(0);
     }
 
-    private function dialect(): array
+    private function dialect(stdClass $request): array
     {
+        $this->currentDialect = $request->dialect;
         return ['ok' => true];
     }
 
     private function run(stdClass $request): array
     {
         $this->debug('Running test case with seq: %d', $request->seq);
+        $this->debug(json_encode($request));
 
         $results = [];
 
         $schemaStorage = new SchemaStorage();
-        $validator = new Validator(new Factory($schemaStorage));
+        $factory = new Factory($schemaStorage);
+        $validator = new Validator($factory);
+        $factory->setDefaultDialect($this->currentDialect ?? $factory->getDefaultDialect());
         $schemaStorage->addSchema('internal://mySchema', $request->case->schema);
 
         if (isset($request->case->registry)) {
@@ -125,7 +132,8 @@ class TestHarness
             try {
                 $validator->validate(
                     $test->instance,
-                    $request->case->schema
+                    $request->case->schema,
+                    $this->checkMode(),
                 );
                 $results[] =  ['valid' => $validator->isValid()];
             } catch (Throwable $e) {
@@ -145,5 +153,13 @@ class TestHarness
     private function debug(string $format, ...$values): void
     {
         fwrite($this->debug, sprintf($format, ...$values) . PHP_EOL);
+    }
+
+    private function checkMode(): int
+    {
+        return match ($this->currentDialect) {
+            'draft6', 'draft7' => Constraint::CHECK_MODE_NORMAL | Constraint::CHECK_MODE_STRICT,
+            default => Constraint::CHECK_MODE_NORMAL,
+        };
     }
 }

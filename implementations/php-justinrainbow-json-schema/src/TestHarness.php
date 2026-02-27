@@ -112,7 +112,6 @@ class TestHarness
     private function run(stdClass $request): array
     {
         $this->debug('Running test case with seq: %d', $request->seq);
-        $this->debug(json_encode($request));
 
         $results = [];
 
@@ -158,7 +157,8 @@ class TestHarness
     private function checkMode(): int
     {
         return match ($this->currentDialect) {
-            'draft6', 'draft7' => Constraint::CHECK_MODE_NORMAL | Constraint::CHECK_MODE_STRICT,
+            'http://json-schema.org/draft-06/schema#',
+            'http://json-schema.org/draft-07/schema#' => Constraint::CHECK_MODE_NORMAL | Constraint::CHECK_MODE_STRICT,
             default => Constraint::CHECK_MODE_NORMAL,
         };
     }
